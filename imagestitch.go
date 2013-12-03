@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/codegangsta/martini"
 	_ "github.com/lib/pq"
-//	"io"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -16,7 +16,7 @@ import (
 
 type ImageStitch struct {
 	Photos []Photo
-	VideoDest *os.File
+	VideoDest string
 
 	WorkDir string
 }
@@ -55,20 +55,46 @@ func (i *ImageStitch) ResizeImages(resize_size string) {
 		log.Fatal(err)
 	}
 
-	log.Printf("ImageStitch ResizeImage: %q\n", out.String())
+	log.Printf("ResizeImage: %q\n", out.String())
 }
 
 func (i *ImageStitch) MorphImages() {
 	// convert *.JPG -delay 10 -morph 10 %05d.morph.jpg
+	files := fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg")
+
+	cmd := exec.Command("convert", files, "-delay", "3", "-morph", "10", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"))
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	err := cmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+	
+	log.Printf("MorphImages %q\n", out.String()) 
 }
 
 func (i *ImageStitch) CreateVideo() {
-	// i.VideoDest, err := ioutil.TempFile(i.WorkDir, "imagestitch")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	i.VideoDest = fmt.Sprintf("%s/%s", i.WorkDir, "imageskitch.mp4")
 
 	//ffmpeg -r 25 -qscale 2 -i %05d.morph.jpg output.mp4
+	cmd := exec.Command("ffmpeg", "-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+		log.Printf(fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"))
+	log.Printf("asdsad")
+		log.Printf(i.VideoDest)
+	log.Printf("asdsad")
+
+	err := cmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+	
+	log.Printf("MorphImages %s: %q\n", i.VideoDest, out.String()) 
 }
 
 func NewImageStitch(photos []Photo) *ImageStitch {
@@ -78,17 +104,20 @@ func NewImageStitch(photos []Photo) *ImageStitch {
 	}
 	log.Printf("WorkDir: %s", workdir)
 
-	// TODO: Copy images to workdir
+	// Copy files to local.
 	for _, photo := range photos {
 		fmt.Println(photo.Timestamp)
 
-		// out, err := os.Create("output.txt")
-		// defer out.Close()
+		out, err := os.Create(fmt.Sprintf("%s/%s.jpg", workdir, photo.Timestamp))
+		defer out.Close()
 
-		// resp, err := http.Get("http://example.com/")
-		// defer resp.Body.Close()
+		resp, err := http.Get(photo.Url)
+		defer resp.Body.Close()
 
-		// n, err := io.Copy(out, resp.Body)
+		_, err = io.Copy(out, resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	return &ImageStitch{
