@@ -47,7 +47,7 @@ type ImageStitch struct {
 func checkForTool(tool string) bool {
 	_, err := exec.LookPath(tool)
 	if err != nil {
-		log.Fatal(fmt.Sprintf("%s is in not installed!", tool))
+		log.Println(fmt.Sprintf("%s is in not installed!", tool))
 		return false
 	}
 
@@ -62,7 +62,7 @@ func runCommand(command string, command_args []string) bytes.Buffer {
 
 	err := cmd.Run()
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	return out
@@ -83,25 +83,28 @@ func (i *ImageStitch) ResizeImages(resize_size string) {
 func (i *ImageStitch) MorphImages() {
 	files := fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg")
 
-	command_args := []string{files, "-delay", "3", "-morph", "10", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg")}
+	// convert *.jpg -delay 3 -morph 10 %05d.morph.jpg
+	command_args := []string{files, "-limit", "memory", "100MB", "-delay", "3", "-morph", "10", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg")}
 	out := runCommand("convert", command_args)
 
-	log.Printf("MorphImages %q\n", out.String())
+	log.Printf("MorphImages %v %q\n", command_args, out.String())
 }
 
 func (i *ImageStitch) CreateVideo() {
 	i.VideoDest = fmt.Sprintf("%s/%s", i.WorkDir, "imageskitch.mp4")
 
-	command_args := []string{"-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest}
-	out := runCommand("ffmpeg", command_args)
+	// avconv -r 25 -qscale 2 -i %05d.morpg.jpg test.mp4
+	command_args := []string{"-y", "-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest}
+//	command_args := []string{"-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg"), i.VideoDest}
+	out := runCommand("avconv", command_args)
 
-	log.Printf("MorphImages %s: %q\n", i.VideoDest, out.String())
+	log.Printf("CreateVideo %v %s: %q\n", command_args, i.VideoDest, out.String())
 }
 
 func (i *ImageStitch) UploadVideo() {
 	file, err := os.Open(i.VideoDest)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	data, err := ioutil.ReadAll(file)
@@ -137,7 +140,7 @@ func (i *ImageStitch) RmWorkDir() {
 func NewImageStitch(user_id string, photos []Photo) *ImageStitch {
 	workdir, err := ioutil.TempDir("", "imagestitch")
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	log.Printf("WorkDir: %s", workdir)
 
@@ -153,7 +156,7 @@ func NewImageStitch(user_id string, photos []Photo) *ImageStitch {
 
 		_, err = io.Copy(out, resp.Body)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
 		}
 	}
 
@@ -180,7 +183,7 @@ func StitchWorker(user_id string) {
 
 	rows, err := db.Query("select photo_url, extract(epoch from created_at) from photos where user_id = $1", user_id)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	var photos []Photo
@@ -188,6 +191,7 @@ func StitchWorker(user_id string) {
 		var photo Photo
 		rows.Scan(&photo.Url, &photo.Timestamp)
 
+		log.Printf("%s image", photo.Url)
 		photos = append(photos, photo)
 	}
 
@@ -207,13 +211,13 @@ func getParseUser(user_id string) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", fmt.Sprintf("https://api.parse.com/1/users/%s", user_id), nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	req.Header.Add("X-Parse-Application-Id", "iX3szWRnSwOsy0ec0KGPWCUrbchGFhQ9ySrWfjPQ")
 	req.Header.Add("X-Parse-REST-API-Key", "xj4sBbRSWY1naZpvbZCjQhPRI7E27JsN89Zs6MOU")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
@@ -260,7 +264,7 @@ func PostPhotoHandler(w http.ResponseWriter, req *http.Request) {
 func dbConnect() *sql.DB {
 	db, err := sql.Open("postgres", "dbname=stitchy sslmode=disable")
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	return db
@@ -277,7 +281,7 @@ func main() {
 
 	checkForTool("mogrify")
 	checkForTool("convert")
-	checkForTool("ffmpeg")
+	checkForTool("avconv")
 
 	StitchingStatus = NewStitchStatus()
 
