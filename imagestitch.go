@@ -94,7 +94,7 @@ func (i *ImageStitch) CreateVideo() {
 	i.VideoDest = fmt.Sprintf("%s/%s", i.WorkDir, "imageskitch.mp4")
 
 	// avconv -r 25 -qscale 2 -i %05d.morpg.jpg test.mp4
-	command_args := []string{"-y", "-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest}
+	command_args := []string{"-y", "-f", "image2", "-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest}
 //	command_args := []string{"-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg"), i.VideoDest}
 	out := runCommand("avconv", command_args)
 
