@@ -3,101 +3,138 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"flag"
 	"fmt"
 	"github.com/codegangsta/martini"
 	_ "github.com/lib/pq"
+	"html"
 	"io"
 	"io/ioutil"
+	"launchpad.net/goamz/aws"
+	"launchpad.net/goamz/s3"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 )
 
+const (
+	Started    = "started"
+	InProgress = "in-progress"
+	Finished   = "finished"
+)
+
+type StitchStatus map[string]string
+
+var (
+	StitchingStatus StitchStatus
+	bucketName      string
+)
+
+func NewStitchStatus() StitchStatus {
+	return make(StitchStatus)
+}
+
 type ImageStitch struct {
-	Photos []Photo
+	UserId string
+
+	Photos    []Photo
 	VideoDest string
 
 	WorkDir string
 }
 
 func checkForTool(tool string) bool {
-	_, err := exec.LookPath("mogrify")
+	_, err := exec.LookPath(tool)
 	if err != nil {
-		log.Fatal("%s is in not installed!", tool)
+		log.Fatal(fmt.Sprintf("%s is in not installed!", tool))
 		return false
 	}
 
 	return true
 }
 
-// mkdir temp
-// cp *.JPG temp/.
-// mogrify -resize 800x800  temp/*.JPG
-// convert temp/*.JPG -delay 10 -morph 10 temp/%05d.jpg
-// ffmpeg -r 25 -qscale 2  -i temp/%05d.jpg output.mp4
-// # rm -R temp
+func runCommand(command string, command_args []string) bytes.Buffer {
+	cmd := exec.Command(command, command_args...)
 
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	err := cmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return out
+}
 func (i *ImageStitch) ResizeImages(resize_size string) {
 	if resize_size == "" {
 		resize_size = "800x600"
 	}
 
 	files := fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg")
+	command_args := []string{"-resize", resize_size, files}
 
-	cmd := exec.Command("mogrify", "-resize", resize_size, files)
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	err := cmd.Run()
-	if err != nil {
-		log.Fatal(err)
-	}
+	out := runCommand("mogrify", command_args)
 
 	log.Printf("ResizeImage: %q\n", out.String())
 }
 
 func (i *ImageStitch) MorphImages() {
-	// convert *.JPG -delay 10 -morph 10 %05d.morph.jpg
 	files := fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg")
 
-	cmd := exec.Command("convert", files, "-delay", "3", "-morph", "10", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"))
+	command_args := []string{files, "-delay", "3", "-morph", "10", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg")}
+	out := runCommand("convert", command_args)
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	err := cmd.Run()
-	if err != nil {
-		log.Fatal(err)
-	}
-	
-	log.Printf("MorphImages %q\n", out.String()) 
+	log.Printf("MorphImages %q\n", out.String())
 }
 
 func (i *ImageStitch) CreateVideo() {
 	i.VideoDest = fmt.Sprintf("%s/%s", i.WorkDir, "imageskitch.mp4")
 
-	//ffmpeg -r 25 -qscale 2 -i %05d.morph.jpg output.mp4
-	cmd := exec.Command("ffmpeg", "-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest)
+	command_args := []string{"-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest}
+	out := runCommand("ffmpeg", command_args)
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	log.Printf("MorphImages %s: %q\n", i.VideoDest, out.String())
+}
 
-		log.Printf(fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"))
-	log.Printf("asdsad")
-		log.Printf(i.VideoDest)
-	log.Printf("asdsad")
-
-	err := cmd.Run()
+func (i *ImageStitch) UploadVideo() {
+	file, err := os.Open(i.VideoDest)
 	if err != nil {
 		log.Fatal(err)
 	}
-	
-	log.Printf("MorphImages %s: %q\n", i.VideoDest, out.String()) 
+
+	data, err := ioutil.ReadAll(file)
+
+	UploadToS3(fmt.Sprintf("%s/stitch.mp4", i.UserId), data, "video/mp4")
 }
 
-func NewImageStitch(photos []Photo) *ImageStitch {
+func UploadToS3(s3_dest string, data []byte, mime_type string) {
+	// The AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables are used.
+	auth, err := aws.EnvAuth()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// Open Bucket
+	s := s3.New(auth, aws.USEast)
+	bucket := s.Bucket(bucketName)
+
+	fmt.Printf("buckname: %s", bucketName)
+
+	err = bucket.Put(s3_dest, data, mime_type, s3.BucketOwnerFull)
+	if err != nil {
+		panic(err.Error())
+	}
+}
+
+func (i *ImageStitch) RmWorkDir() {
+	// TODO
+}
+
+// SendNotification to User
+
+func NewImageStitch(user_id string, photos []Photo) *ImageStitch {
 	workdir, err := ioutil.TempDir("", "imagestitch")
 	if err != nil {
 		log.Fatal(err)
@@ -121,8 +158,9 @@ func NewImageStitch(photos []Photo) *ImageStitch {
 	}
 
 	return &ImageStitch{
-		Photos: photos,
-		WorkDir:   workdir,
+		UserId:  user_id,
+		Photos:  photos,
+		WorkDir: workdir,
 	}
 }
 
@@ -133,6 +171,10 @@ type Photo struct {
 
 func StitchWorker(user_id string) {
 	log.Printf("Starting Stitch for %s", user_id)
+
+	StitchingStatus[user_id] = Started
+
+	// TODO: Make sure that the user exists before running this.
 
 	db := dbConnect()
 
@@ -149,10 +191,14 @@ func StitchWorker(user_id string) {
 		photos = append(photos, photo)
 	}
 
-	image_stitch := NewImageStitch(photos)
+	image_stitch := NewImageStitch(user_id, photos)
 	image_stitch.ResizeImages("")
 	image_stitch.MorphImages()
 	image_stitch.CreateVideo()
+	image_stitch.UploadVideo()
+	image_stitch.RmWorkDir()
+
+	StitchingStatus[user_id] = Finished
 
 	log.Printf("Finished Stitch for %s", user_id)
 }
@@ -175,25 +221,40 @@ func getParseUser(user_id string) {
 }
 
 func PostStitchHandler(params martini.Params) string {
-	//	go StitchWorker(params["user_id"])
+	user_id := params["user_id"]
 
-	return params["user_id"]
+	go StitchWorker(user_id)
+
+	return StitchingStatus[user_id]
 }
 
 func GetStitchHandler(params martini.Params) string {
-
-	/*
-	   curl -X GET \
-	     -H "X-Parse-Application-Id: ur4XEx6YMhw0XOCiEC5A4lrgLy9LnY0rk6FdwpzE" \
-	     -H "X-Parse-REST-API-Key: mbqgNhyjH1vcN1VA5xTQwEqKnQD5BcXQUvwubOvz" \
-	     https://api.parse.com/1/classes/GameScore
-	*/
-	return "Hi"
+	user_id := params["user_id"]
+	return StitchingStatus[user_id]
 }
 
-func PostPhotoHandler(params martini.Params) string {
+func PostPhotoHandler(w http.ResponseWriter, req *http.Request) {
 
-	return "Uploaded"
+	file, handler, err := req.FormFile("file")
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	data, err := ioutil.ReadAll(file)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	err = ioutil.WriteFile(handler.Filename, data, 0777)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	fmt.Printf("asd %s", handler.Filename)
+
+	UploadToS3(fmt.Sprintf("1/%s", handler.Filename), data, "image/jpeg")
+	// Update User#last_photo_at to be a timestamp.
+	fmt.Fprintf(w, "Hello, %q", html.EscapeString(req.URL.Path))
 }
 
 func dbConnect() *sql.DB {
@@ -205,20 +266,28 @@ func dbConnect() *sql.DB {
 	return db
 }
 
+func NotificationWorker() {
+	// Notification Handler which sends a notification to people
+	// who haven't taken a picture in x time.
+}
+
 func main() {
+	flag.StringVar(&bucketName, "b", "", "Bucket Name")
+	flag.Parse()
+
 	checkForTool("mogrify")
 	checkForTool("convert")
 	checkForTool("ffmpeg")
 
-	StitchWorker("1")
+	StitchingStatus = NewStitchStatus()
 
-	//	getParseUser("YhCrKEIF4D")
-	//	getParseFiles("YhCrKEIF4D")
-	// m := martini.Classic()
-	// m.Get("/v1/users/:user_id/stitch",  GetStitchHandler)
-	// m.Post("/v1/users/:user_id/stitch", PostStitchHandler)
-	//	m.Post("/v1/users/:user_id/photo", PostPhotoHandler)
-	// m.Run()
+	go NotificationWorker()
+
+	m := martini.Classic()
+	m.Get("/v1/users/:user_id/stitch", GetStitchHandler)
+	m.Post("/v1/users/:user_id/stitch", PostStitchHandler)
+	m.Post("/v1/users/:user_id/photo", PostPhotoHandler)
+	m.Run()
 }
 
 /*
