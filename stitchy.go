@@ -95,7 +95,7 @@ func (i *ImageStitch) CreateVideo() {
 
 	// avconv -r 25 -qscale 2 -i %05d.morpg.jpg test.mp4
 	command_args := []string{"-y", "-f", "image2", "-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "%05d.morph.jpg"), i.VideoDest}
-//	command_args := []string{"-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg"), i.VideoDest}
+	//	command_args := []string{"-r", "25", "-qscale", "2", "-i", fmt.Sprintf("%s/%s", i.WorkDir, "*.jpg"), i.VideoDest}
 	out := runCommand("avconv", command_args)
 
 	log.Printf("CreateVideo %v %s: %q\n", command_args, i.VideoDest, out.String())
@@ -113,7 +113,6 @@ func (i *ImageStitch) UploadVideo() {
 }
 
 func UploadToS3(s3_dest string, data []byte, mime_type string) {
-	// The AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables are used.
 	auth, err := aws.EnvAuth()
 	if err != nil {
 		panic(err.Error())
@@ -297,13 +296,6 @@ func main() {
 /*
 
  - APIS
-   - POST /v1/users/:user_id/photo ?url=
-   - POST /v1/users/:user_id/stitch
-   - GET /v1/users/:user_id/stitch
-     - Return { } - No Job
-     - Return { "status": "in-progress", "" }
-     - Return { "video_url": "" }
-
  - Client
     -> Talk to Parse for Login
     -> Take a Picture
